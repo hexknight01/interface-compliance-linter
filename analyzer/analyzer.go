@@ -1,6 +1,6 @@
 package requests
 
-import "github.com/golangci/example-plugin-module-linter/types"
+import "github.com/nhatnam1198/interface-compliance-linter/types"
 
 type Validator interface {
 	Validate() error
@@ -20,7 +20,7 @@ func (c CreateEtcdCluster) GetResourceMappings() []types.ResourceMapping {
 	return []types.ResourceMapping{
 		{
 			ResourceId:   types.Id(1),
-			ResourceType: "etcd_cluster",
+			ResourceType: "random string",
 		},
 	}
 }
