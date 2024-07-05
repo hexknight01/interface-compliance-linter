@@ -1,51 +1,126 @@
-package requests
+package analyzer
 
-import "github.com/nhatnam1198/interface-compliance-linter/types"
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
 
-type Validator interface {
-	Validate() error
+	"golang.org/x/tools/go/analysis"
+)
+
+var Analyzer = &analysis.Analyzer{
+	Name: "enforceMethods",
+	Doc:  "Confirms that each struct implements Validator interface and has GetResourceMappings method",
+	Run:  run,
 }
 
-func (c CreateEtcdCluster) Validate() error {
-	return nil
+type TokenInfo struct {
+	pos                 token.Pos
+	hasValidate         bool
+	hasResourceMappings bool
 }
 
-type CreateEtcdCluster struct {
-	ResourceID string
-	Name       string
-	Val        int64
-}
+func run(pass *analysis.Pass) (interface{}, error) {
+	structMap := make(map[string]TokenInfo)
 
-func (c CreateEtcdCluster) GetResourceMappings() []types.ResourceMapping {
-	return []types.ResourceMapping{
-		{
-			ResourceId:   types.Id(1),
-			ResourceType: "random string",
-		},
+	// Inspect struct declarations and add them to structMap
+	inspectStruct := func(node ast.Node) bool {
+		genDecl, ok := node.(*ast.GenDecl)
+		if !ok {
+			return true
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			_, ok = typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			structMap[typeSpec.Name.Name] = TokenInfo{
+				pos:                 typeSpec.Pos(),
+				hasValidate:         false,
+				hasResourceMappings: false,
+			}
+		}
+		return true
 	}
+
+	for _, f := range pass.Files {
+		ast.Inspect(f, inspectStruct)
+	}
+
+	// Inspect function declarations to find Validate and GetResourceMappings methods
+	inspectFunc := func(node ast.Node) bool {
+		funcDecl, ok := node.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+
+		receiverName := getReceiverName(pass.TypesInfo, funcDecl)
+		if receiverName == "" {
+			return true
+		}
+
+		if tokenInfo, ok := structMap[receiverName]; ok {
+			if funcDecl.Name.Name == "Validate" && isValidValidateSignature(funcDecl.Type.Results.List) {
+				tokenInfo.hasValidate = true
+				structMap[receiverName] = tokenInfo
+			} else if funcDecl.Name.Name == "GetResourceMappings" && isValidResourceMappingsSignature(funcDecl.Type.Results.List) {
+				tokenInfo.hasResourceMappings = true
+				structMap[receiverName] = tokenInfo
+			}
+		}
+
+		return true
+	}
+
+	for _, f := range pass.Files {
+		ast.Inspect(f, inspectFunc)
+	}
+
+	// Report structs without required methods
+	for key, value := range structMap {
+		if !value.hasValidate {
+			pass.Reportf(value.pos, "struct %s does not implement method 'Validate() error'", key)
+		}
+		if !value.hasResourceMappings {
+			pass.Reportf(value.pos, "struct %s does not implement method 'GetResourceMappings() []types.ResourceMapping'", key)
+		}
+	}
+
+	return nil, nil
 }
 
-func (c CreateEtcdCluster) AnotherFunc() int {
-	return 3
+func getReceiverName(typesInfo *types.Info, funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+		return ""
+	}
+	recvType := typesInfo.TypeOf(funcDecl.Recv.List[0].Type)
+	namedType, ok := recvType.(*types.Named)
+	if !ok {
+		return ""
+	}
+	return namedType.Obj().Name()
 }
 
-type TruncateTableRequest struct {
+func isValidValidateSignature(results []*ast.Field) bool {
+	if len(results) != 1 {
+		return false
+	}
+	ident, ok := results[0].Type.(*ast.Ident)
+	return ok && ident.Name == "error"
 }
 
-func (t TruncateTableRequest) Validate() error {
-	return nil
-}
-
-type MigrateDatabaseRequest struct {
-}
-
-type ResetPasswordRequest struct {
-}
-
-func (t MigrateDatabaseRequest) Validate() error {
-	return nil
-}
-
-func (t ResetPasswordRequest) Validate() error {
-	return nil
+func isValidResourceMappingsSignature(results []*ast.Field) bool {
+	if len(results) != 1 {
+		return false
+	}
+	arrayType, ok := results[0].Type.(*ast.ArrayType)
+	if !ok {
+		return false
+	}
+	selectorExpr, ok := arrayType.Elt.(*ast.SelectorExpr)
+	return ok && selectorExpr.Sel.Name == "ResourceMapping"
 }
