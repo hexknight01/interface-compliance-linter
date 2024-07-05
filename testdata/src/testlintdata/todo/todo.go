@@ -1,6 +1,6 @@
-package requests
+package todo
 
-import "github.com/golangci/example-plugin-module-linter/types"
+import "github.com/golangci/example-plugin-module-linter/testdata/src/testlintdata/todo/types"
 
 type Validator interface {
 	Validate() error
